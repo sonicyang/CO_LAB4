@@ -1,0 +1,514 @@
+//+FHDR----------------------------------------------------------------
+// (C) Copyright CASLab.EE.NCKU
+// All Right Reserved
+//---------------------------------------------------------------------
+// FILE NAME: cpu_core.v
+// AUTHOR: Chen-Chien Wang
+// CONTACT INFORMATION: ccwang@casmail.ee.ncku.edu.tw
+//---------------------------------------------------------------------
+// RELEASE VERSION: V 1.0
+// VERSION DESCRIPTION: First Edition no errata
+//---------------------------------------------------------------------
+// RELEASE: May 11, 2005  15:31
+//---------------------------------------------------------------------
+// PURPOSE:
+//-FHDR----------------------------------------------------------------
+
+// synopsys translate_off
+`include "timescale.v"
+// synopsys translate_on
+
+
+module cpu_core(
+
+        // System input signals
+        CLK,        // (I) System Clock
+        RESETn,     // (I) System Reset (Low active)
+        IRQ,
+
+        // Instruction memory interface signals
+        IREQ,       // (O) Instruction Memory Request
+        IADDR,      // (O) Instruction Address Bus
+        IDBUS,      // (I) Instruction Data Bus
+
+        // Data memory interface signals
+        DREQ,       // (O) Data memory REQuest
+        DWRITE,     // (O) Data Memory Access Direction
+        DBE,        // (O) Data Memory Access Size
+        DADDR,      // (O) Data Address Bus
+        DWDBUS,     // (O) Data Write Bus
+        DRDBUS,     // (I) Data Read Bus
+
+        // Control interface signals
+        BIGENDIAN,  // (I) Big or Little Endian
+		IACK,
+
+        // Coprocessor interface signals
+        CPWDBUS,        // (O) CoProcessor Write Data BUS
+        CPWREN,         // (O) CoProcessor WRite ENable
+        CPWRNUM,        // (O) CoProcessor Write Register NUMber
+        CPRRNUM,        // (O) CoProcessor Read Register NUMber
+        CPRRSEL,        // (O) CoProcessor Read Register SELect
+        CPRDBUS     // (I) CoProcessor Read Data BUS
+
+        );
+
+    //-------------------------------------------------------------
+    //      System I/O signals
+    //-------------------------------------------------------------
+    input           CLK;        // System Clcok
+    input           RESETn;     // System Reset (Low active)
+   // input           IRQn;
+
+    //-------------------------------------------------------------
+    //  Instruction memory interface signals
+    //-------------------------------------------------------------
+    output          IREQ;       // Instruction Memory Request
+    output  [31:0]  IADDR;      // Instruction Address Bus
+    input   [31:0]  IDBUS;      // Instruction Data Bus
+
+    //-------------------------------------------------------------
+    //      Data memory interface signals
+    //-------------------------------------------------------------
+    output          DREQ;       // Data Memory Request
+    output          DWRITE;     // Data Memory Access Direction
+    output  [3:0]   DBE;        // Data Memory Byte Enable
+    output  [31:0]  DADDR;      // Data Address Bus
+    output  [31:0]  DWDBUS;     // Data Write Bus
+    input   [31:0]  DRDBUS;     // Data Read Bus
+
+    //-------------------------------------------------------------
+    //     Control interface signals
+    //-------------------------------------------------------------
+    input           BIGENDIAN;  // [1]Big-Endian or
+                                    // [0]Little-Endian
+    //-------------------------------------------------------------
+    //      Interrupt signals
+    //-------------------------------------------------------------
+    //input     FIQn;       // Fast Interrupt Request
+    input   [7:0]	 IRQ;       // Interrupt Request
+	output  		 IACK;	
+
+    //-------------------------------------------------------------
+    //      Coprocessor interface signals
+    //-------------------------------------------------------------
+    output  [31:0]  CPWDBUS;        // (O) Write Data BUS
+    output          CPWREN;         // (O) WRite ENable
+    output  [4:0]   CPWRNUM;        // (O) Write Register NUMber
+    output  [4:0]   CPRRNUM;        // (O) Read Register NUMber
+    output          CPRRSEL;        // (O) Read Register SELect
+    input   [31:0]  CPRDBUS;    // (I) Read Data BUS
+
+    //-------------------------------------------------------------
+    //      JTAG and TAP controller signals
+    //-------------------------------------------------------------
+    // Reserve
+
+
+
+    //-------------------------------------------------------------
+    //      Internal signals
+    //-------------------------------------------------------------
+
+    wire            logic0;
+    wire            logic1;
+
+    // IF
+    wire    [31:0]  if_pc;
+
+    // ID
+    wire            stall_n;
+    wire    [1:0]   id_pc_src;
+
+
+    wire    [31:0]  id_pca4;
+    wire    [31:0]  id_ins;
+    wire    [31:0]  id_add_out;
+    wire    [31:0]  id_jump_pc;
+    wire    [31:0]  id_rs_data;
+
+    // EX
+    wire            ex_alu_src;
+    wire    [3:0]   ex_alu_op;
+    wire    [1:0]   ex_alu_move_cond;
+    wire            ex_reg2sn;
+    wire            ex_sht;
+    wire            ex_shd;
+    wire            ex_shp;
+    wire    [1:0]   ex_result_sel;
+    wire    [1:0]   ex_reg_dst;
+    wire            ex_memwrite;
+    wire            ex_memread;
+    wire    [2:0]   ex_store_op;
+    wire            ex_mhi_en;
+    wire            ex_mlo_en;
+    wire    [2:0]   ex_align_op;
+    wire            ex_mulreg_sel;
+    wire    [1:0]   ex_wbdata_sel;
+    wire            ex_regwrite;
+    wire            ex_cpwren;
+    wire            ex_cprrsel;
+
+    wire    [31:0]  ex_pca4;
+    wire    [4:0]   ex_ins_rs;
+    wire    [4:0]   ex_ins_rt;
+    wire    [4:0]   ex_ins_rd;
+    wire    [4:0]   ex_ins_sa;
+    wire    [4:0]   ex_write_num;
+    wire    [31:0]  ex_a_bus;
+    wire    [31:0]  ex_b_bus;
+    wire    [31:0]  ex_extend_bus;
+
+    // MUL
+    wire    [31:0]  mul_a;
+    wire    [31:0]  mul_b;
+    wire    [4:0]   mul_rs;
+    wire    [4:0]   mul_rt;
+    wire            mul_start;
+    wire            mul_sign;
+    wire    [1:0]   mul_type;
+    wire    [31:0]  mul_hi;
+    wire    [31:0]  mul_lo;
+    wire            mul_update_a;
+    wire            mul_update_b;
+    wire    [1:0]   mul_forward_a;
+    wire    [1:0]   mul_forward_b;
+    wire            mul_stall;
+
+    // MEM
+    wire            m_memwrite;
+    wire            m_memread;
+    wire    [2:0]   m_store_op;
+    wire            m_mhi_en;
+    wire            m_mlo_en;
+    wire    [2:0]   m_align_op;
+    wire            m_mulreg_sel;
+    wire    [1:0]   m_wbdata_sel;
+    wire            m_regwrite;
+
+    wire    [31:0]  m_result_bus;
+    wire    [31:0]  m_b_bus;
+    wire    [4:0]   m_write_num;
+
+    // WB
+    wire    [2:0]   wb_align_op;
+    wire            wb_mulreg_sel;
+    wire    [1:0]   wb_wbdata_sel;
+    wire            wb_regwrite;
+    wire    [3:0]   wb_write_mask;
+
+    wire    [31:0]  wb_rdata_bus;
+    wire    [31:0]  wb_result_bus;
+    wire    [31:0]  wb_write_bus;
+    wire    [4:0]   wb_write_num;
+    wire    [31:0]  wb_mul_hi;
+    wire    [31:0]  wb_mul_lo;
+    wire    [1:0]   wb_dmem_offset;
+	
+	//INTERRUPT
+	wire   	[31:0]	EPC;
+	wire   	[31:0]	CAUSE;
+	wire   	[31:0]	STATUS;
+	wire			WANT2ISR_n;
+	wire			IN_ISR;
+
+//=====================================================================
+//      Main Body
+//=====================================================================
+
+    assign  logic0 = 1'b0;
+    assign  logic1 = 1'b1;
+	
+//=====================================================================
+//      Interrupt Controller
+//=====================================================================
+
+    interrupt_controller     u_interrupt_controller(
+								.clk           	(CLK),
+								.rst_n        	(RESETn),
+								.if_pc		  	(if_pc),
+								.epc			(EPC),
+								.cause			(CAUSE),
+								.status			(STATUS),
+								.iack			(IACK),
+								.in_isr			(IN_ISR),
+								   
+        //                           .iabort        (IABORT),
+        //                           .if2id_enable  (if2id_enable),
+                                .irq 			(IRQ)
+                                  );
+
+
+//=====================================================================
+//      Exception Handler
+//=====================================================================
+
+    //exception_handler     u_exception_handler(
+        //                         .clk           (CLK),
+        //                           .rst_n         (RESETn),
+        //                           .iabort        (IABORT),
+        //                           .if2id_enable  (if2id_enable),
+        //
+        //                          );
+
+
+//=====================================================================
+//      IF Stage
+//=====================================================================
+
+    cpu_if  u_cpuif(
+             //system input
+             .clk                   (CLK),
+             .rst_n                 (RESETn),
+             .imem_databus          (IDBUS),
+			 .irq 					(IRQ),
+			 .iack					(IACK),
+             //control signal input
+             .stall_n               (stall_n),
+             .id_pc_src             (id_pc_src),
+             //datapath input
+             .id_add_out            (id_add_out),
+             .id_jump_pc            (id_jump_pc),
+             .id_rs_data            (id_rs_data),
+             //system output
+             .imem_addr             (if_pc),
+             .imem_read             (IREQ),
+			 .in_isr				(IN_ISR),
+             //datapath output
+             .id_pca4               (id_pca4),
+             .id_ins                (id_ins)
+            );
+
+    assign  IADDR = if_pc ;
+
+//=====================================================================
+//      ID Stage
+//=====================================================================
+
+    cpu_id  u_cpuid(
+            //system input
+            .clk                    (CLK),
+            .rst_n                  (RESETn),
+			.irqn 					(IRQ),
+            //control signal input
+            .m_regwrite             (m_regwrite),
+            .wb_regwrite            (wb_regwrite),
+            .wb_write_mask          (wb_write_mask),
+            .mul_update_a           (mul_update_a),
+            .mul_update_b           (mul_update_b),
+            .mul_forward_a          (mul_forward_a),
+            .mul_forward_b          (mul_forward_b),
+            .mul_stall              (mul_stall),
+            //datapath input
+            .id_pca4                (id_pca4),
+            .id_ins                 (id_ins),
+            .ex_write_num           (ex_write_num),
+            .m_result_bus           (m_result_bus),
+            .m_write_num            (m_write_num),
+            .m_memread              (m_memread),
+            .wb_write_bus           (wb_write_bus),
+            .wb_write_num           (wb_write_num),
+            //control signal output
+            .stall_n                (stall_n),
+            .id_pc_src              (id_pc_src),
+            .ex_alu_src             (ex_alu_src),
+            .ex_alu_op              (ex_alu_op),
+            .ex_alu_move_cond       (ex_alu_move_cond),
+            .ex_reg2sn              (ex_reg2sn),
+            .ex_sht                 (ex_sht),
+            .ex_shd                 (ex_shd),
+            .ex_shp                 (ex_shp),
+            .ex_result_sel          (ex_result_sel),
+            .ex_reg_dst             (ex_reg_dst),
+            .ex_memwrite            (ex_memwrite),
+            .ex_memread             (ex_memread),
+            .ex_store_op            (ex_store_op),
+            .ex_mhi_en              (ex_mhi_en),
+            .ex_mlo_en              (ex_mlo_en),
+            .ex_align_op            (ex_align_op),
+            .ex_mulreg_sel          (ex_mulreg_sel),
+            .ex_wbdata_sel          (ex_wbdata_sel),
+            .ex_regwrite            (ex_regwrite),
+            .ex_cpwren              (ex_cpwren),
+            .ex_cprrsel             (ex_cprrsel),
+            //datapath output
+            .id_add_out             (id_add_out),
+            .id_jump_pc             (id_jump_pc),
+            .id_rs_data             (id_rs_data),
+            .ex_pca4                (ex_pca4),
+            .ex_ins_rs              (ex_ins_rs),
+            .ex_ins_rt              (ex_ins_rt),
+            .ex_ins_rd              (ex_ins_rd),
+            .ex_ins_sa              (ex_ins_sa),
+            .ex_a_bus               (ex_a_bus),
+            .ex_b_bus               (ex_b_bus),
+            .ex_extend_bus          (ex_extend_bus),
+            .mul_a                  (mul_a),
+            .mul_b                  (mul_b),
+            .mul_rs                 (mul_rs),
+            .mul_rt                 (mul_rt),
+            .mul_start              (mul_start),
+            .mul_sign               (mul_sign),
+            .mul_type               (mul_type)
+            );
+
+
+
+//=====================================================================
+//      EX Stage
+//=====================================================================
+
+cpu_ex_  u_cpuex(
+            //system input
+            .clk                    (CLK),
+            .rst_n                  (RESETn),
+			.iack					(IACK),
+            //control signal input
+            .ex_alu_src             (ex_alu_src),
+            .ex_alu_op              (ex_alu_op),
+            .ex_alu_move_cond       (ex_alu_move_cond),
+            .ex_reg2sn              (ex_reg2sn),
+            .ex_sht                 (ex_sht),
+            .ex_shd                 (ex_shd),
+            .ex_shp                 (ex_shp),
+            .ex_result_sel          (ex_result_sel),
+            .ex_reg_dst             (ex_reg_dst),
+            .ex_memwrite            (ex_memwrite),
+            .ex_memread             (ex_memread),
+            .ex_store_op            (ex_store_op),
+            .ex_mhi_en              (ex_mhi_en),
+            .ex_mlo_en              (ex_mlo_en),
+            .ex_align_op            (ex_align_op),
+            .ex_mulreg_sel          (ex_mulreg_sel),
+            .ex_wbdata_sel          (ex_wbdata_sel),
+            .ex_regwrite            (ex_regwrite),
+            .ex_cpwren              (ex_cpwren),
+            .ex_cprrsel             (ex_cprrsel),
+            .mul_start              (mul_start),
+            .mul_sign               (mul_sign),
+            .mul_type               (mul_type),
+            //datapath input
+            .wb_regwrite            (wb_regwrite),
+            .wb_write_num           (wb_write_num),
+            .ex_pca4                (ex_pca4),
+            .ex_ins_rs              (ex_ins_rs),
+            .ex_ins_rt              (ex_ins_rt),
+            .ex_ins_rd              (ex_ins_rd),
+            .ex_ins_sa              (ex_ins_sa),
+            .ex_a_bus               (ex_a_bus),
+            .ex_b_bus               (ex_b_bus),
+            .ex_extend_bus          (ex_extend_bus),
+            .wb_write_bus           (wb_write_bus),
+            .mul_a                  (mul_a),
+            .mul_b                  (mul_b),
+            .mul_rs                 (mul_rs),
+            .mul_rt                 (mul_rt),
+            //control signal output
+            .m_memwrite             (m_memwrite),
+            .m_memread              (m_memread),
+            .m_store_op             (m_store_op),
+            .m_mhi_en               (m_mhi_en),
+            .m_mlo_en               (m_mlo_en),
+            .m_align_op             (m_align_op),
+            .m_mulreg_sel           (m_mulreg_sel),
+            .m_wbdata_sel           (m_wbdata_sel),
+            .m_regwrite             (m_regwrite),
+            .mul_update_a           (mul_update_a),
+            .mul_update_b           (mul_update_b),
+            .mul_forward_a          (mul_forward_a),
+            .mul_forward_b          (mul_forward_b),
+            .mul_stall              (mul_stall),
+            //datapath output
+            .ex_write_num           (ex_write_num),
+            .m_result_bus           (m_result_bus),
+            .m_b_bus                (m_b_bus),
+            .m_write_num            (m_write_num),
+            .mul_hi                 (mul_hi),
+            .mul_lo                 (mul_lo),
+            //Coprocessor Interface
+            .CPWDBUS                (CPWDBUS),
+            .CPWREN                 (CPWREN),
+            .CPWRNUM                (CPWRNUM),
+            .CPRRNUM                (CPRRNUM),
+            .CPRRSEL                (CPRRSEL),
+            .CPRDBUS                (CPRDBUS)
+            );
+
+
+
+//=====================================================================
+//      MEM Stage
+//=====================================================================
+
+    cpu_mem u_cpumem(
+            //system input
+            .clk                    (CLK),
+            .rst_n                  (RESETn),
+            .dmem_rdatabus          (DRDBUS),
+			.irqn 					(IRQ),
+            //control signal input
+            .big_endian             (BIGENDIAN),
+            .m_memwrite             (m_memwrite),
+            .m_memread              (m_memread),
+            .m_store_op             (m_store_op),
+            .m_align_op             (m_align_op),
+            .m_mulreg_sel           (m_mulreg_sel),
+            .m_wbdata_sel           (m_wbdata_sel),
+            .m_regwrite             (m_regwrite),
+            .m_mhi_en               (m_mhi_en),
+            .m_mlo_en               (m_mlo_en),
+            //datapath input
+            .m_result_bus           (m_result_bus),
+            .m_b_bus                (m_b_bus),
+            .m_write_num            (m_write_num),
+            .mul_hi                 (mul_hi),
+            .mul_lo                 (mul_lo),
+            //system output
+            .dmem_addr              (DADDR),
+            .dmem_wdatabus          (DWDBUS),
+            .dmem_request           (DREQ),
+            .dmem_be                (DBE),
+            .dmem_write             (DWRITE),
+            //control signal output
+            .wb_align_op            (wb_align_op),
+            .wb_mulreg_sel          (wb_mulreg_sel),
+            .wb_wbdata_sel          (wb_wbdata_sel),
+            .wb_regwrite            (wb_regwrite),
+            //datapath output
+            .wb_write_num           (wb_write_num),
+            .wb_result_bus          (wb_result_bus),
+            .wb_rdata_bus           (wb_rdata_bus),
+            .wb_mul_hi              (wb_mul_hi),
+            .wb_mul_lo              (wb_mul_lo),
+            .wb_dmem_offset         (wb_dmem_offset)
+            );
+
+
+
+//=====================================================================
+//      WB Stage
+//=====================================================================
+
+    cpu_wb  u_cpuwb(
+            //control signal input
+            .big_endian             (BIGENDIAN),
+            .wb_align_op            (wb_align_op),
+            .wb_mulreg_sel          (wb_mulreg_sel),
+            .wb_wbdata_sel          (wb_wbdata_sel),
+			.irqn 					(IRQ),
+            //datapath input
+            .wb_rdata_bus           (wb_rdata_bus),
+            .wb_result_bus          (wb_result_bus),
+            .m_mul_hi               (mul_hi),
+            .m_mul_lo               (mul_lo),
+            .wb_mul_hi              (wb_mul_hi),
+            .wb_mul_lo              (wb_mul_lo),
+            .wb_dmem_offset         (wb_dmem_offset),
+            //control signal output
+            .wb_write_mask          (wb_write_mask),
+            //datapath output
+            .wb_write_bus           (wb_write_bus)
+            );
+
+
+endmodule
